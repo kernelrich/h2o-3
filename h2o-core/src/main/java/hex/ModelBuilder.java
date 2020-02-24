@@ -375,19 +375,6 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     if (error_count() > 0)
       throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(this);
     startClock();
-
-    Model teModel = DKV.getGet(getTEModelKey());
-    if(teModel != null) {
-      Frame trainEncoded = FrameUtils.applyTargetEncoder(teModel, train());
-      setTrain(trainEncoded);
-      _toDelete.put(trainEncoded._key, Arrays.toString(Thread.currentThread().getStackTrace()));
-      if( valid() != null) {
-        setValid(FrameUtils.applyTargetEncoder(teModel, valid()));
-        _toDelete.put(valid()._key, Arrays.toString(Thread.currentThread().getStackTrace()));
-      }
-
-    }
-
     if( !nFoldCV() )
       return _job.start(trainModelImpl(), _parms.progressUnits(), _parms._max_runtime_secs);
 
@@ -658,7 +645,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       cvValid.write_lock(_job);
       cvValid.add(weightName, weights[2*i+1]);
       cvValid.update(_job);
-      
+
       // Shallow clone - not everything is a private copy!!!
       ModelBuilder<M, P, O> cv_mb = (ModelBuilder)this.clone();
       cv_mb.setTrain(cvTrain);
@@ -939,7 +926,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   protected transient String[] _origNames; // only set if ModelBuilder.encodeFrameCategoricals() changes the training frame
   protected transient String[][] _origDomains; // only set if ModelBuilder.encodeFrameCategoricals() changes the training frame
   protected transient double[] _orig_projection_array; // only set if ModelBuilder.encodeFrameCategoricals() changes the training frame
-  
+
   public boolean hasOffsetCol(){ return _parms._offset_column != null;} // don't look at transient Vec
   public boolean hasWeightCol(){return _parms._weights_column != null;} // don't look at transient Vec
   public boolean hasFoldCol(){return _parms._fold_column != null;} // don't look at transient Vec
@@ -1093,7 +1080,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   protected boolean canLearnFromNAs() {
     return false;
   }
-  
+
   /**
    * Checks response variable attributes and adds errors if response variable is unusable.
    */
@@ -1396,6 +1383,8 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     }
 
     if (expensive) {
+      if(getTEModelKey() != null) _parms._categorical_encoding = Model.Parameters.CategoricalEncodingScheme.TargetEncoder;
+
       Frame newtrain = encodeFrameCategoricals(_train, ! _parms._is_cv_model);
       if (newtrain != _train) {
         _origTrain = _train;
@@ -1409,7 +1398,9 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       if (_valid != null) {
         _valid = encodeFrameCategoricals(_valid, ! _parms._is_cv_model /* for CV, need to score one more time in outer loop */);
         _vresponse = _valid.vec(_parms._response_column);
+        printOutFrameAsTable(_valid, false, 20);
       }
+
       boolean restructured = false;
       Vec[] vecs = _train.vecs();
       for (int j = 0; j < vecs.length; ++j) {
@@ -1503,6 +1494,12 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     }
   }
 
+  public static void printOutFrameAsTable(Frame fr, boolean rollups, long limit) {
+    assert limit <= Integer.MAX_VALUE;
+    TwoDimTable twoDimTable = fr.toTwoDimTable(0, (int) limit, rollups);
+    System.out.println(twoDimTable.toString(2, true));
+  }
+
   /**
    * Adapts a given frame to the same schema as the training frame.
    * This includes encoding of categorical variables (if expensive is enabled).
@@ -1544,7 +1541,8 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
 
   private Frame encodeFrameCategoricals(Frame fr, boolean scopeTrack) {
     String[] skipCols = new String[]{_parms._weights_column, _parms._offset_column, _parms._fold_column, _parms._response_column};
-    Frame encoded = FrameUtils.categoricalEncoder(fr, skipCols, _parms._categorical_encoding, getToEigenVec(), _parms._max_categorical_levels);
+    Model teModel = DKV.getGet(getTEModelKey());
+    Frame encoded = FrameUtils.categoricalEncoder(fr, skipCols, _parms._categorical_encoding, getToEigenVec(), _parms._max_categorical_levels, teModel);
     if (encoded != fr) {
       assert encoded._key != null;
       if (scopeTrack)
@@ -1829,7 +1827,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     _workspace.cleanUp();
   }
 
-  @SuppressWarnings("WeakerAccess") // optionally allow users create workspace directly (instead of relying on init) 
+  @SuppressWarnings("WeakerAccess") // optionally allow users create workspace directly (instead of relying on init)
   protected final void initWorkspace(boolean expensive) {
     if (expensive)
       _workspace = new Workspace(true);
