@@ -376,18 +376,6 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(this);
     startClock();
 
-    Model teModel = DKV.getGet(getTEModelKey());
-    if(teModel != null) {
-      Frame trainEncoded = FrameUtils.applyTargetEncoder(teModel, train());
-      setTrain(trainEncoded);
-      _toDelete.put(trainEncoded._key, Arrays.toString(Thread.currentThread().getStackTrace()));
-      if( valid() != null) {
-        setValid(FrameUtils.applyTargetEncoder(teModel, valid()));
-        _toDelete.put(valid()._key, Arrays.toString(Thread.currentThread().getStackTrace()));
-      }
-
-    }
-
     if( !nFoldCV() )
       return _job.start(trainModelImpl(), _parms.progressUnits(), _parms._max_runtime_secs);
 
@@ -1388,7 +1376,9 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     // Toss out extra columns, complain about missing ones, remap categoricals
     Frame va = _parms.valid();  // User-given validation set
     if (va != null) {
-      _valid = adaptFrameToTrain(va, "Validation Frame", "_validation_frame", expensive);
+      //  TODO    we are using in `adaptFrameToTrain`   _train._names which was not yet encoded
+      Frame adaptedValid = adaptFrameToTrain(va, "Validation Frame", "_validation_frame", expensive);
+      setValid(adaptedValid);
       _vresponse = _valid.vec(_parms._response_column);
     } else {
       _valid = null;
@@ -1396,6 +1386,15 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
     }
 
     if (expensive) {
+      Model teModel = DKV.getGet(getTEModelKey());
+      if (teModel != null) {
+        if (train() != null) {
+          Frame trainEncoded = FrameUtils.applyTargetEncoder(teModel, train());
+          setTrain(trainEncoded);
+          _toDelete.put(trainEncoded._key, Arrays.toString(Thread.currentThread().getStackTrace()));
+        }
+      }
+
       Frame newtrain = encodeFrameCategoricals(_train, ! _parms._is_cv_model);
       if (newtrain != _train) {
         _origTrain = _train;
@@ -1407,7 +1406,11 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
         _origTrain = null;
       }
       if (_valid != null) {
-        _valid = encodeFrameCategoricals(_valid, ! _parms._is_cv_model /* for CV, need to score one more time in outer loop */);
+        Frame encodedVa = FrameUtils.applyTargetEncoder(teModel, va);
+        printOutFrameAsTable(encodedVa, false, 20);
+        _toDelete.put(encodedVa._key, Arrays.toString(Thread.currentThread().getStackTrace()));
+
+        _valid = encodeFrameCategoricals(encodedVa, ! _parms._is_cv_model /* for CV, need to score one more time in outer loop */);
         _vresponse = _valid.vec(_parms._response_column);
       }
       boolean restructured = false;
@@ -1501,6 +1504,13 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
         }
       }
     }
+  }
+
+
+  public static void printOutFrameAsTable(Frame fr, boolean rollups, long limit) {
+    assert limit <= Integer.MAX_VALUE;
+    TwoDimTable twoDimTable = fr.toTwoDimTable(0, (int) limit, rollups);
+    System.out.println(twoDimTable.toString(2, true));
   }
 
   /**
