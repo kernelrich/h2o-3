@@ -1371,13 +1371,15 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
 
     // Build the validation set to be compatible with the training set.
     // Toss out extra columns, complain about missing ones, remap categoricals
-    Frame va = _parms.valid();  // User-given validation set
-    if (va != null) {
-      setValid(adaptFrameToTrain(va, "Validation Frame", "_validation_frame", expensive));
-      _vresponse = _valid.vec(_parms._response_column);
-    } else {
-      _valid = null;
-      _vresponse = null;
+    if(!expensive) {
+      Frame va = _parms.valid();  // User-given validation set
+      if (va != null) {
+        setValid(adaptFrameToTrain(va, "Validation Frame", "_validation_frame", expensive, false));
+        _vresponse = _valid.vec(_parms._response_column);
+      } else {
+        _valid = null;
+        _vresponse = null;
+      }
     }
 
     if (expensive) {
@@ -1403,13 +1405,14 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       if (_valid != null) {
         Frame encodedVa = null;
         if (teModel != null) {
-          encodedVa = FrameUtils.applyTargetEncoder(teModel, va, _parms._is_cv_model);
+          encodedVa = FrameUtils.applyTargetEncoder(teModel, _valid, _parms._is_cv_model);
           _toDelete.put(encodedVa._key, Arrays.toString(Thread.currentThread().getStackTrace()));
         } else {
-          encodedVa = va;
+          encodedVa = _valid;
         }
 
         _valid = encodeFrameCategoricals(encodedVa, ! _parms._is_cv_model /* for CV, need to score one more time in outer loop */);
+        setValid(adaptFrameToTrain(_valid, "Validation Frame", "_validation_frame", expensive, true));
         _vresponse = _valid.vec(_parms._response_column);
       }
       boolean restructured = false;
@@ -1518,17 +1521,17 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
    * @return adapted frame
    */
   public Frame init_adaptFrameToTrain(Frame fr, String frDesc, String field, boolean expensive) {
-    Frame adapted = adaptFrameToTrain(fr, frDesc, field, expensive);
+    Frame adapted = adaptFrameToTrain(fr, frDesc, field, expensive, false);
     if (expensive)
       adapted = encodeFrameCategoricals(adapted, true);
     return adapted;
   }
 
-  private Frame adaptFrameToTrain(Frame fr, String frDesc, String field, boolean expensive) {
+  private Frame adaptFrameToTrain(Frame fr, String frDesc, String field, boolean expensive, boolean catEncoded) {
     if (fr.numRows()==0) error(field, frDesc + " must have > 0 rows.");
     Frame adapted = new Frame(null /* not putting this into KV */, fr._names.clone(), fr.vecs().clone());
     try {
-      String[] msgs = Model.adaptTestForTrain(adapted, null, null, _train._names, _train.domains(), _parms, expensive, true, null, getToEigenVec(), _workspace.getToDelete(expensive), false);
+      String[] msgs = Model.adaptTestForTrain(adapted, catEncoded ? _train._names : null, null, _train._names, _train.domains(), _parms, expensive, true, null, getToEigenVec(), _workspace.getToDelete(expensive), false);
       Vec response = adapted.vec(_parms._response_column);
       if (response == null && _parms._response_column != null)
         error(field, frDesc + " must have a response column '" + _parms._response_column + "'.");
