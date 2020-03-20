@@ -39,7 +39,7 @@
 #'        enter 0. Defaults to 10000.
 #' @param keep_levelone_frame \code{Logical}. Keep level one frame used for metalearner training. Defaults to FALSE.
 #' @param export_checkpoints_dir Automatically export generated models to this directory.
-#' @param te_model_id Key of TargetEncoderModel
+#' @param te_model Key of H2OTargetEncoderEstimator or H2OTargetEncoderEstimator
 #' @examples
 #' \dontrun{
 #' library(h2o)
@@ -108,7 +108,7 @@ h2o.stackedEnsemble <- function(x,
                                 score_training_samples = 10000,
                                 keep_levelone_frame = FALSE,
                                 export_checkpoints_dir = NULL,
-                                te_model_id = NULL)
+                                te_model = NULL)
 {
   # Validate required training_frame first and other frame args: should be a valid key or an H2OFrame object
   training_frame <- .validate.H2OFrame(training_frame, required=is.null(blending_frame))
@@ -172,8 +172,8 @@ h2o.stackedEnsemble <- function(x,
     parms$keep_levelone_frame <- keep_levelone_frame
   if (!missing(export_checkpoints_dir))
     parms$export_checkpoints_dir <- export_checkpoints_dir
-  if (!missing(te_model_id))
-    parms$te_model_id <- te_model_id
+  if (!missing(te_model))
+    parms$te_model <- te_model
 
   if (!missing(metalearner_params))
       parms$metalearner_params <- as.character(toJSON(metalearner_params, pretty = TRUE))

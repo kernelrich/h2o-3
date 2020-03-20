@@ -47,7 +47,7 @@ public class StackedEnsembleV99 extends ModelBuilderSchema<StackedEnsemble,Stack
       "score_training_samples",
       "keep_levelone_frame",
       "export_checkpoints_dir",
-      "te_model_id"
+      "te_model"
     };
 
     public static class AlgorithmValuesProvider extends EnumValuesProvider<Algorithm> {
