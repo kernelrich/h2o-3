@@ -44,6 +44,7 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
 
   public static class RegularizationPath extends Iced {
     public double []   _lambdas;
+    public double[] _alphas;
     public double []   _explained_deviance_train;
     public double []   _explained_deviance_valid;
     public double [][] _coefficients;
@@ -51,8 +52,8 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
     public String []   _coefficient_names;
   }
 
-
-  public RegularizationPath getRegularizationPath() {
+  // go through all submodels, copy lambda, alpha, coefficient values and deviance value\s
+  public RegularizationPath getRegularizationPath() { // will be invoked even without lambda_search=true
     RegularizationPath rp = new RegularizationPath();
     rp._coefficient_names = _output._coefficient_names;
     int N = _output._submodels.length;
@@ -68,6 +69,7 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
       P*=_output.nclasses();
     }
     rp._lambdas = new double[N];
+    rp._alphas = new double[N];
     rp._coefficients = new double[N][];
     rp._explained_deviance_train = new double[N];
     if (_parms._valid != null)
@@ -77,6 +79,7 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
     for (int i = 0; i < N; ++i) {
       Submodel sm = _output._submodels[i];
       rp._lambdas[i] = sm.lambda_value;
+      rp._alphas[i] = sm.alpha_value;
       rp._coefficients[i] = sm.getBeta(MemoryManager.malloc8d(P));
       if (_parms._standardize) {
         rp._coefficients_std[i] = rp._coefficients[i];
@@ -173,13 +176,15 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
 
   public void update(double [] beta, double devianceTrain, double devianceTest,int iter){
     int id = _output._submodels.length-1;
-    _output._submodels[id] = new Submodel(_output._submodels[id].lambda_value,beta,iter,devianceTrain,devianceTest);
+    _output._submodels[id] = new Submodel(_output._submodels[id].lambda_value,_output._submodels[id].alpha_value,beta,
+            iter,devianceTrain,devianceTest);
     _output.setSubmodelIdx(id);
   }
 
   public void update(double [] beta, double[] ubeta, double devianceTrain, double devianceTest,int iter){
     int id = _output._submodels.length-1;
-    Submodel sm = new Submodel(_output._submodels[id].lambda_value,beta,iter,devianceTrain,devianceTest);
+    Submodel sm = new Submodel(_output._submodels[id].lambda_value,_output._submodels[id].alpha_value,beta,iter,
+            devianceTrain,devianceTest);
     sm.ubeta = Arrays.copyOf(ubeta, ubeta.length);
     _output._submodels[id] = sm;
     _output.setSubmodelIdx(id);
@@ -224,6 +229,7 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
     public double _prior = -1;
     public boolean _lambda_search = false;
     public boolean _HGLM = false; // true to enable HGLM
+    public boolean _cold_start = false; // start GLM model from scratch if true
     public int _nlambdas = -1;
     public boolean _non_negative = false;
     public double _lambda_min_ratio = -1; // special
@@ -995,6 +1001,7 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
 
   public static class Submodel extends Iced {
     public final double lambda_value;
+    public final double alpha_value;
     public final int    iteration;
     public final double devianceTrain;
     public final double devianceTest;
@@ -1017,8 +1024,9 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
       return idxs != null?idxs.length:(ArrayUtils.countNonzeros(beta));
     }
 
-    public Submodel(double lambda , double [] beta, int iteration, double devTrain, double devTest){
+    public Submodel(double lambda , double alpha, double [] beta, int iteration, double devTrain, double devTest){
       this.lambda_value = lambda;
+      this.alpha_value = alpha;
       this.iteration = iteration;
       this.devianceTrain = devTrain;
       this.devianceTest = devTest;
@@ -1075,12 +1083,20 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
     String[] _random_coefficient_names; // for HGLM
     String[] _random_column_names;
     public int _best_lambda_idx; // lambda which minimizes deviance on validation (if provided) or train (if not)
+    public int _best_alpha_idx;  // alpha index which minimizes deviance on validation if provided else on train
+    public int _best_submodel_idx=0;  // set to 0 as default
     public int _lambda_1se = -1; // lambda_best + sd(lambda); only applicable if running lambda search with nfold
-    public int _selected_lambda_idx; // lambda which minimizes deviance on validation (if provided) or train (if not)
-    public double lambda_best(){return _submodels.length == 0 ? -1 : _submodels[_best_lambda_idx].lambda_value;}
+    public int _selected_lambda_idx; // lambda index which is being worked on
+    public int _selected_alpha_idx;     // alpha index which is being worked on
+    public int _selected_submodel_idx;  // submodel index is being worked
+    public double lambda_best(){return _submodels.length == 0 ? -1 : _submodels[_best_submodel_idx].lambda_value;}
     public double dispersion(){ return _dispersion;}
+    public double alpha_best() { return _submodels.length == 0 ? -1 : _submodels[_best_submodel_idx].alpha_value;}
     public double lambda_1se(){return _lambda_1se == -1 || _lambda_1se >= _submodels.length?-1:_submodels.length == 0 ? -1 : _submodels[_lambda_1se].lambda_value;}
-    public double lambda_selected(){return _submodels[_selected_lambda_idx].lambda_value;}
+    public int bestSubmodelIndex() { return _best_submodel_idx; }
+    public double lambda_selected(){
+      return _submodels[_best_submodel_idx].lambda_value;
+    }
     double[] _global_beta;
     double[] _ubeta;  // HGLM:  random coefficients
     private double[] _zvalues;
@@ -1117,7 +1133,7 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
     public boolean _multinomial;
     public boolean _ordinal;
 
-    public int rank() { return _submodels[_selected_lambda_idx].rank();}
+    public int rank() { return _submodels[_best_submodel_idx].rank();}
 
     public boolean isStandardized() {
       return _dinfo._predictor_transform == TransformType.STANDARDIZE;
@@ -1182,7 +1198,7 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
         _global_beta_multinomial=ArrayUtils.convertTo2DMatrix(beta, coefficient_names.length);
       else
         _global_beta=beta;
-      _submodels = new Submodel[]{new Submodel(0,beta,-1,Double.NaN,Double.NaN)};
+      _submodels = new Submodel[]{new Submodel(0, 0,beta,-1,Double.NaN,Double.NaN)};
     }
     
     public GLMOutput() {_isSupervised = true; _nclasses = -1;}
@@ -1256,8 +1272,42 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
       return res;
     }
 
-    public Submodel pickBestModel() {
-      int bestId = 0;
+    public double selectBestSubmodel(double trainDev, double testDev, double[] xval_test_deviances, int alphaIndex,
+                                     int lambdaIndex, int submodelIdx, double bestDevValue, boolean setAlphaLambdaIdx) {
+      // if testDev exists, use it above everything else;
+      // else if xval exists, use it above trainDev
+      // use trainDev if that is all that is available
+      boolean foundBetterDev = false;
+      double bestValue = bestDevValue;
+      if (!Double.isNaN(testDev) && (testDev < bestDevValue)) {
+        foundBetterDev = true;
+        bestValue = testDev;
+      } else if ((xval_test_deviances != null) && (xval_test_deviances[submodelIdx] < bestDevValue)) {
+        foundBetterDev = true;
+        bestValue = xval_test_deviances[submodelIdx];
+      } else if (trainDev < bestDevValue){ // use trainDev now
+        foundBetterDev = true;
+        bestValue = trainDev;
+      }
+      if (foundBetterDev) {
+        if (setAlphaLambdaIdx) {
+          _best_alpha_idx = alphaIndex;
+          _best_lambda_idx = lambdaIndex;
+        }
+        _best_submodel_idx = submodelIdx;
+      }
+      return bestValue;
+    }
+
+    public Submodel pickBestModel() { // best model is chosen according to deviance
+/*      double bestValue = Double.MAX_VALUE;
+      for (int smIndex = 0; smIndex < _submodels.length; smIndex++) {
+        bestValue = selectBestSubmodel(_submodels[smIndex].devianceTrain, _submodels[smIndex].devianceTest,
+                null, -1, -1, smIndex, bestValue, false);
+      }*/
+      setSubmodelIdx(_best_lambda_idx);  // set coefficients returned in model to be that of the best submodel
+      return _submodels[_best_submodel_idx];
+/*      int bestId = 0;
       Submodel best = _submodels[0];
       for(int i = 1; i < _submodels.length; ++i) {
         Submodel sm = _submodels[i];
@@ -1266,8 +1316,8 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
           best = sm;
         }
       }
-      setSubmodelIdx(_best_lambda_idx = bestId);
-      return best;
+      setSubmodelIdx(_best_submodel_idx = bestId);
+      return best;*/
     }
 
     public double[] getNormBeta() {
@@ -1318,9 +1368,10 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
 
     public double[][] get_global_beta_multinomial(){return _global_beta_multinomial;}
 
-
+    // set model coefficients to that of submodel l
     public void setSubmodelIdx(int l){
-      _selected_lambda_idx = l;
+      //_selected_lambda_idx = l;
+    //  _best_submodel_idx = l;
       if (_random_coefficient_names != null) 
         _ubeta = Arrays.copyOf(_submodels[l].ubeta, _submodels[l].ubeta.length);
       if(_multinomial || _ordinal) {
@@ -1337,7 +1388,9 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
       }
     }
     public double [] beta() { return _global_beta;}
-    public Submodel bestSubmodel(){ return _submodels[_best_lambda_idx];}
+    public Submodel bestSubmodel() {
+      return _submodels[_best_submodel_idx];
+    }
 
     public void setSubmodel(double lambdaCVEstimate) {
       for(int i = 0; i < _submodels.length; ++i)
@@ -1421,12 +1474,12 @@ public class GLMModel extends Model<GLMModel,GLMModel.GLMParameters,GLMModel.GLM
       _output._model_summary.set(0, 1, _parms._link.toString());
       String regularization = "None";
       if (_parms._lambda != null && !(_parms._lambda.length == 1 && _parms._lambda[0] == 0)) { // have regularization
-        if (_parms._alpha[0] == 0)
+        if (_parms._alpha[_output._selected_alpha_idx] == 0)
           regularization = "Ridge ( lambda = ";
-        else if (_parms._alpha[0] == 1)
+        else if (_parms._alpha[_output._selected_alpha_idx] == 1)
           regularization = "Lasso (lambda = ";
         else
-          regularization = "Elastic Net (alpha = " + MathUtils.roundToNDigits(_parms._alpha[0], 4) + ", lambda = ";
+          regularization = "Elastic Net (alpha = " + MathUtils.roundToNDigits(_parms._alpha[_output._selected_alpha_idx], 4) + ", lambda = ";
         regularization = regularization + MathUtils.roundToNDigits(_parms._lambda[_output._selected_lambda_idx], 4) + " )";
       }
       _output._model_summary.set(0, 2, regularization);
