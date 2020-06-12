@@ -1492,7 +1492,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   private Frame encodeCategoricalsWithTE(Model teModel, Frame fr) {
     if (teModel != null && fr != null) {
       Frame encodedWithTE = FrameUtils.internal_applyTargetEncoder(teModel, fr, _parms._is_cv_model);
-      _toDelete.put(encodedWithTE._key, Arrays.toString(Thread.currentThread().getStackTrace()));
+      _workspace.getToDelete(true).put(encodedWithTE._key, Arrays.toString(Thread.currentThread().getStackTrace()));
       return encodedWithTE;
     } else
       return fr;
